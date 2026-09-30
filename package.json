@@ -1,6 +1,6 @@
 {
   "name": "@leing2021/pi-search",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "type": "module",
   "description": "Minimal Secure Evidence Gateway for Pi Coding Agent — search, web_search, web_fetch, research_search. Intent-based provider routing, quota fallback, dual-LLM research, 4-layer abuse prevention.",
   "keywords": [
@@ -35,11 +35,9 @@
     "README.md",
     "README_CN.md"
   ],
-  "dependencies": {
-    "typebox": "^1.1.38"
-  },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
+    "@mariozechner/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "pi": {
     "extensions": [

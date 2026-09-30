@@ -4,11 +4,12 @@ import test from 'node:test';
 
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 
-test('package metadata: runtime imports are declared as dependencies', () => {
-  // Regression: QA-001 — extension entry imports Type from "typebox" at runtime.
-  // It must be a dependency, not only a peerDependency, so package consumers can load the extension entry.
-  assert.equal(typeof pkg.dependencies?.typebox, 'string');
-  assert.ok(!pkg.peerDependencies?.typebox, 'typebox should not be peer-only because it is runtime-imported');
+test('package metadata: typebox is declared as peerDependency only', () => {
+  // Pi host injects typebox into extensions at runtime (extension loader).
+  // An installed copy under dependencies can bypass the loader and create
+  // duplicate runtime modules — host-provided packages must be peerDependencies with a "*" range.
+  assert.equal(pkg.peerDependencies?.typebox, '*');
+  assert.equal(pkg.dependencies?.typebox, undefined, 'typebox must not be a dependency (duplicates host module)');
 });
 
 test('package metadata: integration test script is available for manual QA', () => {
