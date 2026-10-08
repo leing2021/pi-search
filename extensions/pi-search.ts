@@ -91,9 +91,13 @@ export default function (pi: ExtensionAPI) {
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 			const result = await handleResearchSearch(params);
+			// Surface real verification status: disabled vs failed (with error class) vs empty answer
+			const statusPrefix = result.answer
+				? ""
+				: `${result.verificationStatus ?? "[VERIFICATION DISABLED]"}\n`;
 			const text = result.answer
 				? result.answer + "\n\nCitations:\n" + result.citations.map((c) => `[${c.id}] ${c.title} — ${c.url}`).join("\n")
-				: "Evidence collected (LLM disabled):\n" + result.citations.map((c) => `[${c.id}] ${c.title} — ${c.url}`).join("\n");
+				: statusPrefix + "Evidence collected:\n" + result.citations.map((c) => `[${c.id}] ${c.title} — ${c.url}`).join("\n");
 			return {
 				content: [{ type: "text" as const, text }],
 				details: result.details,
