@@ -137,6 +137,7 @@ test('web_fetch tool: default firecrawlFn calls Firecrawl API with correct param
   assert.equal(capturedMethod, 'POST');
   assert.equal(capturedAuth, 'Bearer test-fc-key-789');
   assert.equal(capturedBody?.url, 'https://example.com/page');
+  assert.deepEqual(capturedBody?.formats, ['markdown'], 'Firecrawl v1 needs explicit markdown format');
   assert.ok(result.content.includes('Firecrawl HTTP content'));
   assert.equal(result.details.extractor, 'firecrawl');
 });
@@ -218,18 +219,17 @@ test('research_search tool: deep mode with LLM verification', async () => {
 // Unit 2 Bug: web_fetch must not bypass URL security via Firecrawl fallback
 // ============================================================
 
-test('web_fetch tool: HTTP URL blocked even with Firecrawl configured', async () => {
+test('web_fetch allows HTTP URL via local fetch and no Firecrawl fallback', async () => {
   let firecrawlCalled = false;
   const result = await handleWebFetch({
     url: 'http://example.com',
   }, {
-    fetch: async () => { throw new Error('HTTP blocked by security'); },
+    fetch: async () => ({ text: 'plain http content', riskFlags: [] }),
     firecrawl: async () => { firecrawlCalled = true; return { content: 'Should not reach here' }; },
     firecrawlApiKey: 'test-key',
   });
-  assert.equal(firecrawlCalled, false, 'Firecrawl should NOT be called for HTTP URL');
-  assert.equal(result.details.extractor, 'failed', `extractor should be 'failed', got '${result.details.extractor}'`);
-  assert.ok(result.content.includes('FetchError'), 'Content should indicate fetch error');
+  assert.equal(firecrawlCalled, false, 'local fetch should succeed for HTTP, no fallback needed');
+  assert.equal(result.details.extractor, 'local', `extractor should be 'local', got '${result.details.extractor}'`);
 });
 
 test('web_fetch tool: localhost hostname blocked even with Firecrawl configured', async () => {
@@ -262,6 +262,19 @@ test('web_fetch tool: private IP behavior respects proxy config', async () => {
   // This test just verifies no crash either way
   assert.ok(result.details.extractor === 'firecrawl' || result.details.extractor === 'failed',
     `unexpected extractor: ${result.details.extractor}`);
+});
+
+test('web_fetch flags thin local content as may-need-js', async () => {
+  const result = await handleWebFetch({
+    url: 'https://example.com/spa-app',
+  }, {
+    fetch: async () => ({ text: 'loading...', riskFlags: [] }),
+  });
+  assert.equal(result.details.extractor, 'local');
+  assert.ok(
+    (result.details.riskFlags ?? []).includes('thin-content-may-need-js'),
+    `thin local content must be flagged, got: ${JSON.stringify(result.details.riskFlags)}`,
+  );
 });
 
 test('web_fetch tool: URL credentials blocked even with Firecrawl configured', async () => {

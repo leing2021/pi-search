@@ -282,6 +282,36 @@ test('researchSearch deep mode uses Tavily and optional LLM', async () => {
   assert.equal(result.verificationStatus, '[VERIFICATION ENABLED]');
 });
 
+test('researchSearch skips LLM when no valid evidence fetched', async () => {
+  let llmCalls = 0;
+  const result = await researchSearch({
+    query: 'test',
+    mode: 'basic',
+    env: {
+      PI_SEARCH_LLM_ENABLED: 'always',
+      PI_SEARCH_LLM_PROVIDER: 'openai',
+      PI_SEARCH_LLM_MODEL: 'm',
+      PI_SEARCH_LLM_BASE_URL: 'https://llm.example/v1',
+      PI_SEARCH_LLM_API_KEY_ENV: 'OPENAI_API_KEY',
+      OPENAI_API_KEY: 'test-openai-key',
+    },
+    webSearch: async () => ({
+      ok: true,
+      provider: 'brave',
+      data: [{ title: 'T', url: 'https://example.com/x', snippet: 's' }],
+      details: { providersAttempted: ['brave'], apiKeyExposed: false },
+    }),
+    fetch: async () => { throw new Error('all fetches fail'); },
+    llmFetch: async () => {
+      llmCalls += 1;
+      return { ok: true, content: JSON.stringify({ choices: [{ message: { content: '{"answer":"hallucinated"}' } }] }) };
+    },
+  });
+  assert.equal(llmCalls, 0, 'LLM must not be called without evidence');
+  assert.equal(result.answer, '');
+  assert.match(result.verificationStatus, /NoEvidence/);
+});
+
 test('researchSearch returns structured error when all sources fail', async () => {
   const result = await researchSearch({
     query: 'test',

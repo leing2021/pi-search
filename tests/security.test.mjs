@@ -47,10 +47,11 @@ test('resolveSafePath allows outside cwd only with explicit opt-in and non-sensi
   assert.equal(resolved, '/tmp');
 });
 
-test('validateUrl rejects HTTP by default and allows HTTPS', async () => {
-  await assert.rejects(() => validateUrl('http://example.com'), /NetworkPolicyError/);
-  const result = await validateUrl('https://1.1.1.1');
-  assert.equal(result.url.href, 'https://1.1.1.1/');
+test('validateUrl allows plain HTTP (SSRF checks still apply) and HTTPS', async () => {
+  const result = await validateUrl('http://1.1.1.1');
+  assert.equal(result.url.protocol, 'http:');
+  const httpsResult = await validateUrl('https://1.1.1.1');
+  assert.equal(httpsResult.url.href, 'https://1.1.1.1/');
 });
 
 test('validateUrl rejects URL credentials', async () => {
@@ -107,6 +108,7 @@ test('safeFetchText sanitizes HTML and wraps untrusted content', async () => {
     assert.ok(result.text.includes('Hello'));
     assert.ok(!result.text.includes('bad()'));
     assert.ok(result.riskFlags.includes('prompt-injection:ignore-previous-instructions'));
+    assert.ok(result.riskFlags.includes('plaintext-http'), 'final http:// URL must carry plaintext-http flag');
   } finally {
     server.close();
   }
@@ -198,11 +200,13 @@ test('validateUrl still blocks localhost even with proxy configured', async () =
   );
 });
 
-test('validateUrl still blocks HTTP even with proxy configured', async () => {
+test('validateUrl allows HTTP even with proxy configured (IP checks unchanged)', async () => {
   const env = { ALL_PROXY: 'socks5h://127.0.0.1:1080' };
+  const result = await validateUrl('http://1.1.1.1', { env });
+  assert.equal(result.url.protocol, 'http:');
   await assert.rejects(
-    () => validateUrl('http://example.com', { env }),
-    /HTTP is blocked/,
+    () => validateUrl('ftp://1.1.1.1', { env }),
+    /Only http\(s\) is supported/,
   );
 });
 

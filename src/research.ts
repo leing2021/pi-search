@@ -387,18 +387,23 @@ export async function researchSearch(options: {
   let llmResult: LlmResult | null = null;
 
   if (llmConfig.enabled) {
-    const prompt = buildLlmPrompt(options.query, {
-      ...evidence,
-      sources: clipped.sources,
-    });
+    if (clipped.sources.length === 0) {
+      // Never feed an empty evidence pack to the LLM: it can only hallucinate.
+      llmResult = { ok: false, errorClass: 'NoEvidence', message: 'no valid evidence fetched' };
+    } else {
+      const prompt = buildLlmPrompt(options.query, {
+        ...evidence,
+        sources: clipped.sources,
+      });
 
-    const actualLlmFetch = options.llmFetch ?? defaultLlmFetch;
-    llmResult = await callSecondLlm({
-      prompt,
-      config: llmConfig,
-      fetch: actualLlmFetch,
-      env,
-    });
+      const actualLlmFetch = options.llmFetch ?? defaultLlmFetch;
+      llmResult = await callSecondLlm({
+        prompt,
+        config: llmConfig,
+        fetch: actualLlmFetch,
+        env,
+      });
+    }
   }
 
   return buildResearchReport({

@@ -129,6 +129,24 @@ test('webSearch falls back on quota exhaustion', async () => {
   assert.equal(result.provider, 'tavily');
 });
 
+test('webSearch records cooldown skip reason in fallbackReasons', async () => {
+  resetAllCooldowns();
+  recordProviderQuota('brave', 'HTTP 429');
+  const result = await webSearch({
+    query: 'test',
+    provider: 'auto',
+    env: { BRAVE_SEARCH_API_KEY: 'key', TAVILY_API_KEY: 'key' },
+    fetch: async (url) => {
+      if (url.includes('tavily')) return makeJsonResponse({ results: [{ title: 'Tavily result', url: 'https://tavily.example', snippet: 'test' }] });
+      throw new Error('unexpected ' + url);
+    },
+  });
+  assert.equal(result.provider, 'tavily');
+  const skip = (result.details?.fallbackReasons ?? []).find((f) => f.provider === 'brave');
+  assert.ok(skip, 'cooldown-skipped provider must appear in fallbackReasons');
+  assert.match(String(skip.reason), /cooldown/);
+});
+
 test('webSearch does NOT fallback on non-quota Brave timeout', async () => {
   resetAllCooldowns();
   const result = await webSearch({

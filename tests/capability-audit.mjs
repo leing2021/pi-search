@@ -98,7 +98,7 @@ for (const [id, params] of webCases) {
 // ---------- C. web_fetch ----------
 const fetchCases = [
   ["C1.normal-doc", "https://react.dev/blog"],
-  ["C2.raw-md", "https://raw.githubusercontent.com/leing2021/pi-search/main/README.md"],
+  ["C2.raw-md", "https://raw.githubusercontent.com/leing2021/pi-search/master/README.md"],
   ["C3.spa-page", "https://excalidraw.com/"],
   ["C4.big-wiki", "https://en.wikipedia.org/wiki/Node.js"],
   ["C5.pdf", "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"],

@@ -7,7 +7,7 @@ import path from 'node:path';
 import { isIP } from 'node:net';
 import { promisify } from 'node:util';
 
-import { sanitizeHtml, truncateText, wrapUntrusted } from './text.ts';
+import { sanitizeHtml, truncateText, wrapUntrusted, uniqueFlags } from './text.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -180,8 +180,10 @@ export async function validateUrl(rawUrl: string, options: {
 
   const searxngOrigin = options.allowSearxngPrivate ? getSearxngOrigin(env) : null;
   const isSearxngExactOrigin = Boolean(searxngOrigin && url.origin === searxngOrigin);
-  if (url.protocol !== 'https:' && !(isSearxngExactOrigin && url.protocol === 'http:')) {
-    throw new PiSearchError('NetworkPolicyError', 'HTTP is blocked by default');
+  // HTTP allowed: SSRF safety comes from the per-hop IP/private-net checks below,
+  // not from the scheme. Plaintext transport is surfaced as a riskFlag instead.
+  if (url.protocol !== 'https:' && url.protocol !== 'http:' && !(isSearxngExactOrigin && url.protocol === 'http:')) {
+    throw new PiSearchError('NetworkPolicyError', 'Only http(s) is supported');
   }
 
   const host = url.hostname.toLowerCase();
@@ -317,10 +319,13 @@ export async function safeFetchText(rawUrl: string, options: {
     const raw = decoded.toString('utf8');
     const sanitized = sanitizeHtml(raw);
     const clipped = truncateText(sanitized.text, maxChars);
+    if (validation.url.protocol === 'http:') {
+      sanitized.riskFlags.push('plaintext-http');
+    }
     return {
       url: validation.url.href,
       text: wrapUntrusted(clipped.text),
-      riskFlags: sanitized.riskFlags,
+      riskFlags: uniqueFlags(sanitized.riskFlags),
       truncated: clipped.truncated,
       details: {
         contentType,

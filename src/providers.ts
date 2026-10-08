@@ -352,7 +352,11 @@ export async function webSearch(options: {
   const actualFetch = options.fetch ?? defaultFetch;
 
   for (const prov of providers) {
-    if (!isProviderAvailable(prov.id) && prov.id !== 'duckduckgo') continue;
+    if (!isProviderAvailable(prov.id) && prov.id !== 'duckduckgo') {
+      const cooldownReason = quotaStates.get(prov.id)?.reason ?? 'previous failure';
+      fallbackReasons.push({ provider: prov.id, reason: `cooldown: ${cooldownReason}` });
+      continue;
+    }
 
     providersAttempted.push(prov.id);
 

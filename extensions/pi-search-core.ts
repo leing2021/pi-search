@@ -27,6 +27,7 @@ import {
 
 const MAX_CONTENT = 6000;
 const MAX_RESULTS = 10;
+const THIN_CONTENT_CHARS = 500;
 
 type LocalSearchResult = {
 	title: string;
@@ -296,7 +297,7 @@ export async function handleWebFetch(
 							'Content-Type': 'application/json',
 							'Authorization': `Bearer ${fcApiKey}`,
 						},
-						body: JSON.stringify({ url }),
+					body: JSON.stringify({ url, formats: ['markdown'] }),
 					});
 					if (!response.ok) {
 						throw new Error(`Firecrawl API error: HTTP ${response.status ?? 'unknown'}`);
@@ -368,6 +369,9 @@ export async function handleWebFetch(
 
 	const injectionFlags = detectPromptInjection(content);
 	allRiskFlags.push(...injectionFlags);
+	if (extractor === "local" && content.length < THIN_CONTENT_CHARS) {
+		allRiskFlags.push("thin-content-may-need-js");
+	}
 
 	const wrapped = wrapUntrusted(content);
 
