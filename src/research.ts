@@ -81,6 +81,8 @@ function sanitizeEvidenceText(rawText: string, maxChars: number): { text: string
   };
 }
 
+export const DEFAULT_EVIDENCE_MAX_CHARS = 16000;
+
 export function clipEvidence(
   sources: EvidenceSource[],
   options: { maxChars?: number; maxSources?: number } = {},
@@ -91,13 +93,17 @@ export function clipEvidence(
   fetchErrors: number;
   allRiskFlags: string[];
 } {
-  const maxChars = options.maxChars ?? 8000;
+  const maxChars = options.maxChars ?? DEFAULT_EVIDENCE_MAX_CHARS;
   const maxSources = options.maxSources ?? 5;
   const clipped: EvidenceSource[] = [];
   let totalChars = 0;
   let truncated = false;
   let fetchErrors = 0;
   const allRiskFlags: string[] = [];
+  // Eligible = fetch-ok sources only; failed siblings neither consume budget
+  // nor dilute the divisor (review M1: over-clipping survivors on degraded runs)
+  let eligibleRemaining = 0;
+  for (const s of sources) if (!s.fetchError) eligibleRemaining += 1;
 
   for (let i = 0; i < sources.length; i++) {
     const source = sources[i];
@@ -116,7 +122,7 @@ export function clipEvidence(
     // split the leftover budget across the sources still eligible, with a
     // per-source floor share. Early long sources cannot starve later ones;
     // short sources release unused budget back to the pool.
-    const remainingSources = Math.min(sources.length - i, maxSources - clipped.length);
+    const remainingSources = Math.min(eligibleRemaining, maxSources - clipped.length);
     const share = Math.max(
       Math.floor(remainingBudget / Math.max(1, remainingSources)),
       Math.min(remainingBudget, Math.ceil(maxChars / maxSources)),
@@ -127,6 +133,7 @@ export function clipEvidence(
     const newSource: EvidenceSource = { ...source, text };
     clipped.push(newSource);
     totalChars += text.length;
+    eligibleRemaining -= 1;
     if (text.length >= share) truncated = true;
   }
 
@@ -356,7 +363,7 @@ export async function researchSearch(options: {
 }): Promise<ResearchReport> {
   const mode = options.mode ?? 'basic';
   const maxSources = options.maxSources ?? 5;
-  const maxChars = options.maxChars ?? 16000;
+  const maxChars = options.maxChars ?? DEFAULT_EVIDENCE_MAX_CHARS;
   const env = options.env ?? process.env;
 
   const llmConfig = detectLlmConfig(env);

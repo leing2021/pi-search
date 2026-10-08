@@ -74,7 +74,7 @@ test('clipEvidence balances budget across sources (context recall over first-com
   ];
   const result = clipEvidence(sources, { maxChars: 6000, maxSources: 5 });
   assert.equal(result.sources.length, 3, 'all 3 sources must fit under 6000 chars with fair shares');
-  assert.ok(result.sources.every((s) => s.text.length <= 2000 + 100), 'per-source share ≈ 2000');
+  assert.ok(result.sources.every((s) => s.text.length <= 2000), 'per-source share capped at 2000');
   assert.ok(result.totalChars <= 6000);
   // 短源让出余额给后续源：总预算不被早期短源浪费
   const mixed = clipEvidence(
@@ -86,6 +86,20 @@ test('clipEvidence balances budget across sources (context recall over first-com
   );
   assert.equal(mixed.sources.length, 2);
   assert.ok(mixed.sources[1].text.length > 3000, 'unused budget from short source flows to later sources');
+});
+
+test('clipEvidence does not over-clip surviving sources when siblings failed (review M1)', () => {
+  const sources = [
+    { id: '1', url: 'https://ok.com', title: 'OK', text: 'K'.repeat(4000) },
+    { id: '2', url: 'https://x.com', title: 'X', text: '', fetchError: 'fetch failed' },
+    { id: '3', url: 'https://y.com', title: 'Y', text: '', fetchError: 'fetch failed' },
+    { id: '4', url: 'https://z.com', title: 'Z', text: '', fetchError: 'fetch failed' },
+  ];
+  const result = clipEvidence(sources, { maxChars: 16000, maxSources: 5 });
+  // fetch-error 源不占预算也不计入除数：唯一幸存源应保全全文（4000 << 16000）
+  assert.equal(result.sources.length, 1);
+  assert.equal(result.sources[0].text.length, 4000, 'sole surviving source keeps full text');
+  assert.equal(result.truncated, false, 'no spurious truncation flag when budget is ample');
 });
 
 test('clipEvidence totalChars hard constraint: never exceeds maxChars', () => {
@@ -424,6 +438,24 @@ test('researchSearch never bypasses NetworkPolicyError via Firecrawl', async () 
   });
   assert.equal(fcCalls, 0, 'security policy rejections must not be bypassed via Firecrawl');
   assert.equal(result.citations.length, 0, 'policy-blocked source must be dropped, not rescued');
+});
+
+test('researchSearch Firecrawl rescue with empty body lands as fetchError, not empty source', async () => {
+  const result = await researchSearch({
+    query: 'test',
+    mode: 'basic',
+    env: { PI_SEARCH_LLM_ENABLED: 'never', FIRECRAWL_API_KEY: 'fc-key' },
+    webSearch: async () => ({
+      ok: true,
+      provider: 'brave',
+      data: [{ title: 'T', url: 'https://example.com/empty-md', snippet: 's' }],
+      details: {},
+    }),
+    fetch: async () => { const e = new Error('HTTP 500'); e.name = 'HttpStatusError'; throw e; },
+    firecrawlFetch: async () => ({ ok: true, content: JSON.stringify({ data: { content: '', markdown: '' } }) }),
+  });
+  assert.equal(result.details.firecrawlRescues, 0, 'empty rescue body must not count as rescued');
+  assert.equal(result.citations.length, 0, 'no empty-text source may enter citations');
 });
 
 test('researchSearch returns structured error when all sources fail', async () => {
