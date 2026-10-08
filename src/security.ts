@@ -182,7 +182,7 @@ export async function validateUrl(rawUrl: string, options: {
   const isSearxngExactOrigin = Boolean(searxngOrigin && url.origin === searxngOrigin);
   // HTTP allowed: SSRF safety comes from the per-hop IP/private-net checks below,
   // not from the scheme. Plaintext transport is surfaced as a riskFlag instead.
-  if (url.protocol !== 'https:' && url.protocol !== 'http:' && !(isSearxngExactOrigin && url.protocol === 'http:')) {
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     throw new PiSearchError('NetworkPolicyError', 'Only http(s) is supported');
   }
 

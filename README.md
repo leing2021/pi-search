@@ -48,7 +48,7 @@ research_search({ query: "SSRF protection in Node.js" })
 |---|---|---|
 | `search` | Local repo search | Uses `ripgrep`; blocks unsafe paths by default |
 | `web_search` | Web source discovery | Routes through SearXNG / Brave / Tavily / DuckDuckGo |
-| `web_fetch` | Safe page fetch | HTTPS, SSRF checks, redirect checks, HTML cleanup |
+| `web_fetch` | Safe page fetch | http(s), SSRF checks, redirect checks, HTML cleanup |
 | `research_search` | Evidence collection | LLM verification is off unless explicitly enabled |
 
 ## Configuration

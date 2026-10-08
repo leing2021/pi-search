@@ -48,7 +48,7 @@ research_search({ query: "SSRF protection in Node.js" })
 |---|---|---|
 | `search` | 本地仓库搜索 | 使用 `ripgrep`；默认阻止不安全路径 |
 | `web_search` | 网页来源发现 | 通过 SearXNG / Brave / Tavily / DuckDuckGo 路由 |
-| `web_fetch` | 安全网页抓取 | HTTPS、SSRF 检查、重定向检查、HTML 清理 |
+| `web_fetch` | 安全网页抓取 | http(s)、SSRF 检查、重定向检查、HTML 清理 |
 | `research_search` | 证据收集 | LLM 验证默认关闭，需显式启用 |
 
 ## 配置

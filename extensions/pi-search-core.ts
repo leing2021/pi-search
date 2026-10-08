@@ -297,8 +297,8 @@ export async function handleWebFetch(
 							'Content-Type': 'application/json',
 							'Authorization': `Bearer ${fcApiKey}`,
 						},
-					body: JSON.stringify({ url, formats: ['markdown'] }),
-					});
+							body: JSON.stringify({ url, formats: ['markdown'] }),
+						});
 					if (!response.ok) {
 						throw new Error(`Firecrawl API error: HTTP ${response.status ?? 'unknown'}`);
 					}
