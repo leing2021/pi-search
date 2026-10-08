@@ -367,3 +367,47 @@ test('search tool: rg exit-1 no-match stays silent empty result', async () => {
   assert.equal(result.error, undefined, 'exit-1 no-match is not an error');
   assert.equal(result.results.length, 0);
 });
+
+// ---------- Review round 1 fixes: H1 / M1 / L1 ----------
+
+test('initProxyDispatcher: mirrors undici env contract (lowercase vars activate, ALL_PROXY http routes, ALL_PROXY socks ignored)', async () => {
+  const { initProxyDispatcher } = await import('../extensions/pi-search-core.ts');
+  const undici = await import('undici');
+  const original = undici.getGlobalDispatcher();
+  try {
+    // lowercase-only env must activate (undici reads both cases)
+    assert.equal(await initProxyDispatcher({ https_proxy: 'http://127.0.0.1:7890' }), true);
+    assert.ok(undici.getGlobalDispatcher() instanceof undici.EnvHttpProxyAgent);
+
+    // ALL_PROXY with http:// value must route (undici ignores ALL_PROXY natively)
+    assert.equal(await initProxyDispatcher({ ALL_PROXY: 'http://127.0.0.1:7890' }), true);
+    assert.ok(undici.getGlobalDispatcher() instanceof undici.EnvHttpProxyAgent);
+
+    // ALL_PROXY with socks5:// must NOT install a broken dispatcher (undici ProxyAgent is http-only)
+    const current = undici.getGlobalDispatcher();
+    assert.equal(await initProxyDispatcher({ ALL_PROXY: 'socks5://127.0.0.1:1080' }), false);
+    assert.equal(undici.getGlobalDispatcher(), current, 'socks ALL_PROXY must leave dispatcher untouched');
+  } finally {
+    undici.setGlobalDispatcher(original);
+  }
+});
+
+test('search tool: fused CJK+ASCII word keeps ASCII token (no-space mix)', async () => {
+  let capturedArgs = null;
+  const result = await handleSearch({ query: 'vite配置优化' }, {
+    runCommand: async (cmd, args) => { capturedArgs = args; return { stdout: '', stderr: '' }; },
+    resolveSafePath: () => '/resolved/path',
+  });
+  assert.equal(result.details.engine, 'rg-cjk-bigram');
+  const pattern = capturedArgs[capturedArgs.length - 2];
+  assert.ok(pattern.includes('vite'), `ASCII token lost in fused word: ${pattern}`);
+  assert.ok(pattern.includes('配置') && pattern.includes('优化'), `CJK bigrams missing: ${pattern}`);
+});
+
+test('search tool: CJK query with half-width punctuation and space routes to natural language', async () => {
+  const result = await handleSearch({ query: '报错: 不能找到模块' }, {
+    runCommand: async () => ({ stdout: '', stderr: '' }),
+    resolveSafePath: () => '/resolved/path',
+  });
+  assert.equal(result.details.engine, 'rg-cjk-bigram', 'CJK presence must dominate code detection');
+});

@@ -80,6 +80,14 @@ export OPENAI_API_KEY="<OPENAI_API_KEY>"
 export PI_SEARCH_ALLOW_OUTSIDE_CWD="always"
 ```
 
+### Proxy note
+
+When `HTTPS_PROXY` / `HTTP_PROXY` (any case) or `ALL_PROXY` (http(s):// only) is set,
+pi-search installs an undici `EnvHttpProxyAgent` as the global fetch dispatcher
+at extension load. This affects every `fetch` in the host process, matching
+curl-style env-proxy semantics. Set `NO_PROXY=localhost,127.0.0.1` to keep
+loopback/LAN traffic direct.
+
 ## Provider routing
 
 `pi-search` uses intent-based routing instead of broad fan-out.

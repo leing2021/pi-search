@@ -42,15 +42,30 @@ function trunc(text: string, max = MAX_CONTENT): string {
 
 /**
  * Activate proxy support for Node fetch (undici ignores HTTP(S)_PROXY env by default).
- * Safe to call multiple times; only sets the dispatcher when a proxy env var is present.
+ * Mirrors the undici EnvHttpProxyAgent env contract (reads both cases, ignores ALL_PROXY)
+ * so the guard never claims success when the agent would stay direct:
+ *   - lowercase http(s)_proxy counts as configured (undici reads it)
+ *   - ALL_PROXY with an http(s):// value is passed explicitly (undici skips ALL_PROXY)
+ *   - ALL_PROXY with socks5:// is ignored — undici ProxyAgent is http-only
+ * Safe to call multiple times; no proxy env leaves the dispatcher untouched.
  */
 export async function initProxyDispatcher(
 	env: Record<string, string | undefined> = process.env,
 ): Promise<boolean> {
-	if (!(env.HTTPS_PROXY || env.HTTP_PROXY || env.ALL_PROXY)) return false;
+	const httpProxy = env.HTTP_PROXY ?? env.http_proxy;
+	const httpsProxy = env.HTTPS_PROXY ?? env.https_proxy;
+	const allProxy = env.ALL_PROXY ?? env.all_proxy;
+	const isHttpUrl = (v?: string) => Boolean(v && /^https?:\/\//i.test(v));
+
+	if (!httpProxy && !httpsProxy) {
+		if (!isHttpUrl(allProxy)) return false;
+	}
 	try {
 		const { setGlobalDispatcher, EnvHttpProxyAgent } = await import("undici");
-		setGlobalDispatcher(new EnvHttpProxyAgent());
+		const opts: { httpProxy?: string; httpsProxy?: string } = {};
+		if (!httpProxy && isHttpUrl(allProxy)) opts.httpProxy = allProxy!;
+		if (!httpsProxy && isHttpUrl(allProxy)) opts.httpsProxy = allProxy!;
+		setGlobalDispatcher(new EnvHttpProxyAgent(opts));
 		return true;
 	} catch {
 		return false; // undici unavailable — fetch stays direct
@@ -68,26 +83,25 @@ function hasCJK(q: string): boolean {
  */
 function extractSearchTokens(query: string): string[] {
 	const tokens: string[] = [];
-	for (const word of query.split(/\s+/).filter(Boolean)) {
-		if (hasCJK(word)) {
-			for (const run of word.match(/[\u4e00-\u9fff]+/g) ?? []) {
-				if (run.length === 1) {
-					tokens.push(run);
-					continue;
-				}
-				for (let i = 0; i + 1 < run.length; i++) tokens.push(run.slice(i, i + 2));
+	for (const part of query.split(/([\u4e00-\u9fff]+)/)) {
+		if (!part) continue;
+		if (hasCJK(part)) {
+			if (part.length === 1) {
+				tokens.push(part);
+				continue;
 			}
+			for (let i = 0; i + 1 < part.length; i++) tokens.push(part.slice(i, i + 2));
 		} else {
-			tokens.push(word);
+			tokens.push(...part.split(/\s+/).filter(Boolean));
 		}
 	}
 	return tokens;
 }
 
 function looksLikeCode(q: string): boolean {
+	if (hasCJK(q)) return false; // CJK text never matches code identifiers — always natural language
 	const hasSpace = q.includes(" ");
 	if (hasSpace) return /[{}()\[\]=<>:;%@#]/.test(q);
-	if (hasCJK(q)) return false; // CJK text never matches code identifiers — treat as natural language
 	return /[A-Z][a-z]+[A-Z]|_\w{2,}|\w+\.\w{2,}|\/\w+|[{}()\[\]=<>:;${}%@#]/.test(q) || q.length <= 20;
 }
 

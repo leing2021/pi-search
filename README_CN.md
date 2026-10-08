@@ -80,6 +80,13 @@ export OPENAI_API_KEY="<OPENAI_API_KEY>"
 export PI_SEARCH_ALLOW_OUTSIDE_CWD="always"
 ```
 
+### 代理说明
+
+设置了 `HTTPS_PROXY` / `HTTP_PROXY`（大小写均可）或 `ALL_PROXY`（仅 http(s)://）时，
+pi-search 会在扩展加载时安装 undici `EnvHttpProxyAgent` 作为全局 fetch
+dispatcher。这会影响宿主进程内所有 `fetch`，与 curl 风格的 env 代理语义一致。
+如需回环/内网流量直连，设置 `NO_PROXY=localhost,127.0.0.1`。
+
 ## Provider 路由
 
 `pi-search` 使用任务感知路由，而不是广泛 fan-out。
