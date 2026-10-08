@@ -18,6 +18,49 @@ await initProxyDispatcher();
 const BENCH_DIR = "docs/reports/benchmarks";
 const verdict = (ok, degraded = false) => (ok ? (degraded ? "degraded" : "pass") : "fail");
 
+// ---------- 质量维度 helpers（确定性，零 LLM） ----------
+const hostOf = (u) => { try { return new URL(u).hostname; } catch { return "?"; } };
+const STOP = new Set(["the", "a", "an", "of", "in", "for", "to", "and", "or", "how", "is", "are", "what", "best", "with", "on", "de", "la", "的", "了", "是", "在", "和"]);
+const contentTokens = (q) => {
+  const out = [];
+  for (const part of q.toLowerCase().split(/[^a-z0-9\u4e00-\u9fff]+/)) {
+    if (!part) continue;
+    if (/[\u4e00-\u9fff]/.test(part)) {
+      // CJK 整词过严：bigram 化后匹配更宽容
+      if (part.length === 1) { out.push(part); continue; }
+      for (let i = 0; i + 1 < part.length; i++) out.push(part.slice(i, i + 2));
+    } else if (!STOP.has(part) && part.length > 1) {
+      out.push(part);
+    }
+  }
+  return [...new Set(out)].slice(0, 12);
+};
+// relevance@k: top-k 结果 title+snippet 覆盖查询核心词的占比（keyword-overlap proxy，业界 P@k 的确定性近似）
+const relevanceAt = (query, results, k) => {
+  const qts = contentTokens(query);
+  if (!qts.length) return null;
+  const top = results.slice(0, k);
+  const hit = top.filter((r) => {
+    const hay = `${r.title} ${r.snippet}`.toLowerCase();
+    return qts.some((t) => hay.includes(t));
+  }).length;
+  return hit / top.length;
+};
+// 域名多样性: unique hosts / count（信息增益 proxy，同域重复=低多样性）
+const domainDiversity = (results) => (results.length ? new Set(results.map((r) => hostOf(r.url))).size / results.length : 0);
+// 新鲜度: 结果文本中可解析的近年份出现数（时效性查询用）
+const freshnessHits = (results, minYear) => results.filter((r) => {
+  const years = `${r.title} ${r.snippet}`.match(/20\d{2}/g) ?? [];
+  return years.some((y) => Number(y) >= minYear);
+}).length;
+// 噪声密度: 导航/页脚词计数 / 内容长度（web_fetch 抽取质量，越低越好）
+const NOISE_WORDS = ["cookie", "sign in", "log in", "subscribe", "newsletter", "all rights reserved", "skip to content"];
+const noiseDensity = (content) => {
+  const lower = content.toLowerCase();
+  const hits = NOISE_WORDS.reduce((n, w) => n + (lower.includes(w) ? 1 : 0), 0);
+  return content.length ? hits / content.length : 0;
+};
+
 async function retry(times, fn) {
   let lastErr;
   for (let i = 0; i < times; i++) {
@@ -33,7 +76,9 @@ const CASES = [
     id: "S1.code-symbol", suite: "search",
     run: async () => {
       const r = await handleSearch({ query: "registerTool" });
-      return { verdict: verdict(r.results.length > 0 && r.details.engine === "rg"), metrics: { count: r.results.length, engine: r.details.engine } };
+      const qts = contentTokens("registerTool");
+      const p5 = r.results.length ? r.results.slice(0, 5).filter((x) => qts.some((t) => x.snippet.toLowerCase().includes(t))).length / Math.min(5, r.results.length) : 0;
+      return { verdict: verdict(r.results.length > 0 && r.details.engine === "rg"), metrics: { count: r.results.length, engine: r.details.engine, precisionAt5: p5 } };
     },
   },
   {
@@ -54,19 +99,39 @@ const CASES = [
   {
     id: "W1.general-en", suite: "web_search",
     run: async () => await retry(2, async () => {
-      const r = await handleWebSearch({ query: "ripgrep latest version release notes" });
+      const q = "ripgrep latest version release notes";
+      const r = await handleWebSearch({ query: q });
+      const rel = relevanceAt(q, r.results, 5);
+      const div = domainDiversity(r.results);
       const withSnippet = r.results.filter((x) => (x.snippet ?? "").trim().length > 20).length;
       return {
-        verdict: verdict(r.provider !== "none" && r.results.length >= 3, withSnippet < r.results.length * 0.5),
-        metrics: { provider: r.provider, count: r.results.length, withSnippet },
+        verdict: verdict(r.provider !== "none" && r.results.length >= 3 && rel >= 0.4, div < 0.4),
+        metrics: { provider: r.provider, count: r.results.length, relevanceAt5: rel, domainDiversity: div, snippetDensity: r.results.length ? withSnippet / r.results.length : 0 },
       };
     }),
   },
   {
     id: "W2.general-zh", suite: "web_search",
     run: async () => await retry(2, async () => {
-      const r = await handleWebSearch({ query: "大模型 上下文工程 实践" });
-      return { verdict: verdict(r.provider !== "none" && r.results.length >= 3), metrics: { provider: r.provider, count: r.results.length } };
+      const q = "大模型 上下文工程 实践";
+      const r = await handleWebSearch({ query: q });
+      const rel = relevanceAt(q, r.results, 5);
+      return {
+        verdict: verdict(r.provider !== "none" && r.results.length >= 3 && rel >= 0.4),
+        metrics: { provider: r.provider, count: r.results.length, relevanceAt5: rel, domainDiversity: domainDiversity(r.results) },
+      };
+    }),
+  },
+  {
+    id: "W4.freshness", suite: "web_search",
+    run: async () => await retry(2, async () => {
+      const year = new Date().getFullYear();
+      const r = await handleWebSearch({ query: "node js latest LTS release" });
+      const fresh = freshnessHits(r.results, year - 1);
+      return {
+        verdict: verdict(r.provider !== "none" && r.results.length >= 3 && fresh >= 2, fresh < 2),
+        metrics: { provider: r.provider, count: r.results.length, freshHits: fresh, minYear: year - 1 },
+      };
     }),
   },
   {
@@ -85,7 +150,9 @@ const CASES = [
     run: async () => await retry(2, async () => {
       const r = await handleWebFetch({ url: "https://react.dev/blog" });
       const len = r.content.length;
-      return { verdict: verdict(!r.content.startsWith("[FetchError") && len > 500 && len < 20000), metrics: { len } };
+      const nd = noiseDensity(r.content);
+      // 阈值参考业界 context-precision 思路：噪声词密度 <= 0.002（约每 500 字 ≤1 个噪声词）
+      return { verdict: verdict(!r.content.startsWith("[FetchError") && len > 500 && len < 20000, nd > 0.002), metrics: { len, noiseDensity: nd } };
     }),
   },
   {
@@ -124,9 +191,13 @@ const CASES = [
     id: "R1.basic", suite: "research_search",
     run: async () => await retry(1, async () => {
       const r = await handleResearchSearch({ query: "SSRF protection Node.js best practices", mode: "basic" });
+      const cites = r.citations ?? [];
+      const evidenceRatio = cites.length >= 5 ? 1 : cites.length / 5; // context-recall proxy：5 源目标实得占比
+      const div = domainDiversity(cites);
+      // 阈值参考 RAGAS 起步线：recall>0.8 起评；此处宽到 >=0.4（网络抖动），<0.8 记 degraded
       return {
-        verdict: verdict(r.ok && r.citations.length >= 1),
-        metrics: { citations: r.citations.length, ms: null, answerLen: r.answer.length },
+        verdict: verdict(r.ok && cites.length >= 1, evidenceRatio < 0.4 || div < 0.4),
+        metrics: { citations: cites.length, evidenceRatio, domainDiversity: div, answerLen: r.answer.length, confidence: r.confidence, ms: null },
       };
     }),
   },
@@ -158,10 +229,42 @@ const summary = {
   fail: results.filter((r) => r.verdict === "fail").length,
   inconclusive: results.filter((r) => r.verdict === "inconclusive").length,
 };
+// ---------- 维度聚合 scorecard ----------
+function buildScorecard(results) {
+  const avg = (xs) => { const v = xs.filter((x) => typeof x === "number"); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+  const m = (id) => results.find((r) => r.id === id)?.metrics ?? {};
+  const card = {
+    availability: `${results.filter((r) => r.verdict === "pass").length}/${results.length} pass`,
+    search: { precisionAt5: avg([m("S1.code-symbol").precisionAt5]) },
+    web_search: {
+      relevanceAt5: avg([m("W1.general-en").relevanceAt5, m("W2.general-zh").relevanceAt5]),
+      domainDiversity: avg([m("W1.general-en").domainDiversity, m("W2.general-zh").domainDiversity, m("W3.ddg-fallback").domainDiversity].filter((x) => x !== undefined)),
+      snippetDensity: m("W1.general-en").snippetDensity ?? null,
+      freshness: m("W4.freshness").freshHits ?? null,
+    },
+    web_fetch: {
+      noiseDensity: m("F1.doc-page").noiseDensity ?? null,
+      completenessBytes: avg([m("F1.doc-page").len, m("F2.http-redirect").len]),
+    },
+    research: {
+      evidenceRatio: m("R1.basic").evidenceRatio ?? null,
+      domainDiversity: m("R1.basic").domainDiversity ?? null,
+      hallucinationGuard: results.find((r) => r.id === "R2.no-evidence-hallucination-guard")?.verdict === "pass",
+    },
+    latency: {
+      searchP50: avg(results.filter((r) => r.suite === "search").map((r) => r.ms)),
+      webSearchP50: avg(results.filter((r) => r.suite === "web_search").map((r) => r.ms)),
+      fetchP50: avg(results.filter((r) => r.suite === "web_fetch").map((r) => r.ms)),
+      researchP50: avg(results.filter((r) => r.suite === "research_search").map((r) => r.ms)),
+    },
+  };
+  return card;
+}
+
 const report = {
   generatedAt: new Date().toISOString(),
   version: JSON.parse(readFileSync("package.json", "utf8")).version,
-  summary, results,
+  summary, scorecard: buildScorecard(results), results,
 };
 
 // ---------- 存档 ----------
@@ -182,6 +285,15 @@ if (compareIdx !== -1) {
 
 console.log("\n========== BENCHMARK SUMMARY ==========");
 console.log(`v${report.version}  pass=${summary.pass} degraded=${summary.degraded} fail=${summary.fail} inconclusive=${summary.inconclusive}`);
+console.log("\n---------- DIMENSION SCORECARD ----------");
+console.log(`availability        ${report.scorecard.availability}`);
+const sc = report.scorecard;
+const fmt = (v) => (typeof v === "number" ? v.toFixed(3) : String(v));
+console.log(`search.precision@5 ${fmt(sc.search.precisionAt5)}`);
+console.log(`web.relevance@5    ${fmt(sc.web_search.relevanceAt5)}  diversity ${fmt(sc.web_search.domainDiversity)}  snippet ${fmt(sc.web_search.snippetDensity)}  freshHits ${String(sc.web_search.freshness)}`);
+console.log(`fetch.noiseDensity ${fmt(sc.web_fetch.noiseDensity)}  bytes ${fmt(sc.web_fetch.completenessBytes)}`);
+console.log(`research.evidence  ${fmt(sc.research.evidenceRatio)}  diversity ${fmt(sc.research.domainDiversity)}  guard ${sc.research.hallucinationGuard ? "ok" : "FAIL"}`);
+console.log(`latency  search ${Math.round(sc.latency.searchP50)}ms  web ${Math.round(sc.latency.webSearchP50)}ms  fetch ${Math.round(sc.latency.fetchP50)}ms  research ${Math.round(sc.latency.researchP50)}ms`);
 console.log(`archived: ${path.join(BENCH_DIR, `${stamp}-v${report.version}.json`)}`);
 
 if (prevPath && existsSync(prevPath)) {
