@@ -135,6 +135,9 @@ test('callSecondLlm sends only query + evidence to provider', async () => {
   // prompt should contain evidence but not env vars
   assert.ok(capturedPrompt.includes('SSRF prevention'));
   assert.ok(!capturedPrompt.includes('test-openai-key'));
+  // truncation guard: reasoning models need headroom beyond 1024
+  const parsedBody = JSON.parse(capturedPrompt);
+  assert.equal(parsedBody.max_tokens, 4096);
 });
 
 test('callSecondLlm anti-leakage: env values not in prompt', async () => {
