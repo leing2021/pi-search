@@ -387,7 +387,8 @@ export async function researchSearch(options: {
   let llmResult: LlmResult | null = null;
 
   if (llmConfig.enabled) {
-    if (clipped.sources.length === 0) {
+    const hasUsableEvidence = clipped.sources.some((s) => s.text.trim().length > 0);
+    if (!hasUsableEvidence) {
       // Never feed an empty evidence pack to the LLM: it can only hallucinate.
       llmResult = { ok: false, errorClass: 'NoEvidence', message: 'no valid evidence fetched' };
     } else {

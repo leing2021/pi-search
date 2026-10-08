@@ -312,6 +312,35 @@ test('researchSearch skips LLM when no valid evidence fetched', async () => {
   assert.match(result.verificationStatus, /NoEvidence/);
 });
 
+test('researchSearch skips LLM when evidence is only whitespace', async () => {
+  let llmCalls = 0;
+  const result = await researchSearch({
+    query: 'test',
+    mode: 'basic',
+    env: {
+      PI_SEARCH_LLM_ENABLED: 'always',
+      PI_SEARCH_LLM_PROVIDER: 'openai',
+      PI_SEARCH_LLM_MODEL: 'm',
+      PI_SEARCH_LLM_BASE_URL: 'https://llm.example/v1',
+      PI_SEARCH_LLM_API_KEY_ENV: 'OPENAI_API_KEY',
+      OPENAI_API_KEY: 'test-openai-key',
+    },
+    webSearch: async () => ({
+      ok: true,
+      provider: 'brave',
+      data: [{ title: 'T', url: 'https://example.com/empty', snippet: 's' }],
+      details: { providersAttempted: ['brave'], apiKeyExposed: false },
+    }),
+    fetch: async () => ({ text: '   \n\t  ', riskFlags: [] }),
+    llmFetch: async () => {
+      llmCalls += 1;
+      return { ok: true, content: '{"answer":"hallucinated"}' };
+    },
+  });
+  assert.equal(llmCalls, 0, 'whitespace-only evidence must not reach the LLM');
+  assert.match(result.verificationStatus, /NoEvidence/);
+});
+
 test('researchSearch returns structured error when all sources fail', async () => {
   const result = await researchSearch({
     query: 'test',
