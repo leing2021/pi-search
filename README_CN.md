@@ -210,8 +210,12 @@ DEEPSEEK_API_KEY="<DEEPSEEK_API_KEY>"
 ## 测试
 
 ```bash
-npm test
+npm test        # 单测（109）
+npm run bench   # 发布基线：固定用例矩阵，自动与上一份存档基线对比
 ```
+
+基线存档在 `docs/reports/benchmarks/`（gitignore）；`latest.json` 始终指向最近一次。
+发现回归时退出码为 1。
 
 ## pi-search 不是什么
 

@@ -27,7 +27,8 @@
   },
   "scripts": {
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
-    "test:integration": "node --experimental-strip-types tests/integration-test.mjs"
+    "test:integration": "node --experimental-strip-types tests/integration-test.mjs",
+    "bench": "node --experimental-strip-types tests/benchmark.mjs --compare"
   },
   "files": [
     "extensions/",
