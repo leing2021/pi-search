@@ -287,3 +287,83 @@ test('all tools include apiKeyExposed: false in details', async () => {
   });
   assert.equal(ws.details.apiKeyExposed, false);
 });
+
+// ---------- U1: proxy dispatcher (P0-1) ----------
+
+test('initProxyDispatcher: sets EnvHttpProxyAgent when proxy env present, no-op otherwise', async () => {
+  const { initProxyDispatcher } = await import('../extensions/pi-search-core.ts');
+  const undici = await import('undici');
+  const original = undici.getGlobalDispatcher();
+  try {
+    const changed = await initProxyDispatcher({ HTTPS_PROXY: 'http://127.0.0.1:7890' });
+    assert.equal(changed, true);
+    assert.ok(undici.getGlobalDispatcher() instanceof undici.EnvHttpProxyAgent);
+
+    const current = undici.getGlobalDispatcher();
+    const unchanged = await initProxyDispatcher({});
+    assert.equal(unchanged, false);
+    assert.equal(undici.getGlobalDispatcher(), current, 'no proxy env must not touch dispatcher');
+  } finally {
+    undici.setGlobalDispatcher(original);
+  }
+});
+
+// ---------- U2: CJK query routing (P0-2) ----------
+
+test('search tool: CJK natural language routes to bigram OR pattern', async () => {
+  let capturedArgs = null;
+  const result = await handleSearch({ query: '处理重定向' }, {
+    runCommand: async (cmd, args) => { capturedArgs = args; return { stdout: '', stderr: '' }; },
+    resolveSafePath: () => '/resolved/path',
+  });
+  assert.equal(result.details.engine, 'rg-cjk-bigram');
+  const pattern = capturedArgs[capturedArgs.length - 2]; // [...flags, '--', pattern, path]
+  assert.ok(pattern.includes('处理') && pattern.includes('重定') && pattern.includes('定向'),
+    `bigrams missing in pattern: ${pattern}`);
+  assert.ok(capturedArgs.includes('-i'), 'CJK search must be case-insensitive');
+});
+
+test('search tool: mixed CJK+ASCII query keeps ASCII tokens and CJK bigrams', async () => {
+  let capturedArgs = null;
+  await handleSearch({ query: 'redirect 校验' }, {
+    runCommand: async (cmd, args) => { capturedArgs = args; return { stdout: '', stderr: '' }; },
+    resolveSafePath: () => '/resolved/path',
+  });
+  const pattern = capturedArgs[capturedArgs.length - 2];
+  assert.ok(pattern.includes('redirect') && pattern.includes('校验'),
+    `single CJK char and ASCII token must survive: ${pattern}`);
+});
+
+test('search tool: pure ASCII code query still routes to exact rg', async () => {
+  let capturedArgs = null;
+  const result = await handleSearch({ query: 'safeFetchText' }, {
+    runCommand: async (cmd, args) => { capturedArgs = args; return { stdout: '', stderr: '' }; },
+    resolveSafePath: () => '/resolved/path',
+  });
+  assert.equal(result.details.engine, 'rg');
+  assert.equal(capturedArgs[capturedArgs.length - 2], 'safeFetchText');
+});
+
+// ---------- U3: rg missing explicit error (P0-3) ----------
+
+test('search tool: missing ripgrep returns explicit error, not silent empty', async () => {
+  const err = new Error('spawn rg ENOENT');
+  err.code = 'ENOENT';
+  const result = await handleSearch({ query: 'foo' }, {
+    runCommand: async () => { throw err; },
+    resolveSafePath: () => '/resolved/path',
+  });
+  assert.equal(result.details.engine, 'rg-missing');
+  assert.match(result.error?.message ?? '', /ripgrep/i);
+});
+
+test('search tool: rg exit-1 no-match stays silent empty result', async () => {
+  const err = new Error('Command failed: rg --max-count 20 -- zzz .');
+  err.code = 1;
+  const result = await handleSearch({ query: 'zzz_nomatch' }, {
+    runCommand: async () => { throw err; },
+    resolveSafePath: () => '/resolved/path',
+  });
+  assert.equal(result.error, undefined, 'exit-1 no-match is not an error');
+  assert.equal(result.results.length, 0);
+});

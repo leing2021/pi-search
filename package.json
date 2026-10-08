@@ -39,6 +39,9 @@
     "@mariozechner/pi-coding-agent": "*",
     "typebox": "*"
   },
+  "dependencies": {
+    "undici": "^6.21.2"
+  },
   "pi": {
     "extensions": [
       "extensions/pi-search.ts"

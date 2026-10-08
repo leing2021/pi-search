@@ -40,9 +40,54 @@ function trunc(text: string, max = MAX_CONTENT): string {
 	return text.length <= max ? text : text.slice(0, max) + `\n... (truncated, ${text.length} total chars)`;
 }
 
+/**
+ * Activate proxy support for Node fetch (undici ignores HTTP(S)_PROXY env by default).
+ * Safe to call multiple times; only sets the dispatcher when a proxy env var is present.
+ */
+export async function initProxyDispatcher(
+	env: Record<string, string | undefined> = process.env,
+): Promise<boolean> {
+	if (!(env.HTTPS_PROXY || env.HTTP_PROXY || env.ALL_PROXY)) return false;
+	try {
+		const { setGlobalDispatcher, EnvHttpProxyAgent } = await import("undici");
+		setGlobalDispatcher(new EnvHttpProxyAgent());
+		return true;
+	} catch {
+		return false; // undici unavailable — fetch stays direct
+	}
+}
+
+function hasCJK(q: string): boolean {
+	return /[\u4e00-\u9fff]/.test(q);
+}
+
+/**
+ * Split a query into rg OR-pattern tokens.
+ * ASCII words pass through; CJK runs become overlapping bigrams (single CJK chars pass through),
+ * because Chinese words rarely appear verbatim in code/comments.
+ */
+function extractSearchTokens(query: string): string[] {
+	const tokens: string[] = [];
+	for (const word of query.split(/\s+/).filter(Boolean)) {
+		if (hasCJK(word)) {
+			for (const run of word.match(/[\u4e00-\u9fff]+/g) ?? []) {
+				if (run.length === 1) {
+					tokens.push(run);
+					continue;
+				}
+				for (let i = 0; i + 1 < run.length; i++) tokens.push(run.slice(i, i + 2));
+			}
+		} else {
+			tokens.push(word);
+		}
+	}
+	return tokens;
+}
+
 function looksLikeCode(q: string): boolean {
 	const hasSpace = q.includes(" ");
 	if (hasSpace) return /[{}()\[\]=<>:;%@#]/.test(q);
+	if (hasCJK(q)) return false; // CJK text never matches code identifiers — treat as natural language
 	return /[A-Z][a-z]+[A-Z]|_\w{2,}|\w+\.\w{2,}|\/\w+|[{}()\[\]=<>:;${}%@#]/.test(q) || q.length <= 20;
 }
 
@@ -67,6 +112,7 @@ export async function handleSearch(
 	}
 
 	const isCode = looksLikeCode(params.query);
+	const cjk = hasCJK(params.query);
 	let rgOutput = "";
 	let usedEngine = "rg";
 
@@ -84,7 +130,7 @@ export async function handleSearch(
 			});
 			rgOutput = stdout;
 		} else {
-			const tokens = params.query.split(/\s+/).filter(Boolean).slice(0, 5);
+			const tokens = extractSearchTokens(params.query).slice(0, 8);
 			const pattern = tokens.join("|");
 			const { stdout } = await run("rg", [
 				"--max-count", "20",
@@ -98,10 +144,26 @@ export async function handleSearch(
 				timeout: 10_000,
 			});
 			rgOutput = stdout;
-			usedEngine = "rg-multi-token";
+			usedEngine = cjk ? "rg-cjk-bigram" : "rg-multi-token";
 		}
-	} catch {
-		usedEngine = isCode ? "rg" : "rg-multi-token";
+	} catch (err: unknown) {
+		const code = (err as NodeJS.ErrnoException | null)?.code;
+		const msg = err instanceof Error ? err.message : String(err);
+		if (code === "ENOENT" || /spawn rg ENOENT/i.test(msg)) {
+			return {
+				results: [],
+				details: {
+					engine: "rg-missing",
+					query: params.query,
+					path: searchPath,
+					sandboxMode: "process-env-cwd-timeout",
+					rgAvailable: false,
+					apiKeyExposed: false,
+				},
+				error: { message: "ripgrep (rg) not found in PATH. Install ripgrep, or use web_search for web sources." },
+			};
+		}
+		usedEngine = isCode ? "rg" : (cjk ? "rg-cjk-bigram" : "rg-multi-token");
 	}
 
 	const results: LocalSearchResult[] = rgOutput

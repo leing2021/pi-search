@@ -17,14 +17,18 @@ import {
 	handleWebSearch,
 	handleWebFetch,
 	handleResearchSearch,
+	initProxyDispatcher,
 	TOOL_NAMES,
 } from "./pi-search-core.ts";
 
 export default function (pi: ExtensionAPI) {
+	// Node fetch ignores HTTP(S)_PROXY env by default; activate proxy routing early.
+	void initProxyDispatcher();
+
 	pi.registerTool({
 		name: "search",
 		label: "Search",
-		description: "Search local codebase using ripgrep. Code-like queries use exact match; natural language uses multi-token OR fallback. No mgrep.",
+		description: "Search local codebase using ripgrep. Code-like queries use exact match; natural language uses multi-token OR fallback; CJK queries use bigram matching. No mgrep.",
 		parameters: Type.Object({
 			query: Type.String({ description: "Search query: symbol, pattern, or natural language" }),
 			path: Type.Optional(Type.String({ description: "Directory to search (default: cwd)" })),
