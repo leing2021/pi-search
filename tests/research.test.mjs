@@ -162,6 +162,20 @@ test('callSecondLlm anti-leakage: env values not in prompt', async () => {
   assert.ok(!capturedBody.includes('test-brave-redacted-value'));
 });
 
+test('callSecondLlm parses JSON wrapped in markdown code fence', async () => {
+  const fenced = '```json\n{"answer": "fenced answer", "citations": ["1"], "confidence": "high"}\n```';
+  const result = await callSecondLlm({
+    prompt: 'test',
+    config: { enabled: true, provider: 'openai', model: 'gpt-4o-mini', baseUrl: 'https://api.openai.com/v1', apiKeyEnv: 'OPENAI_API_KEY' },
+    fetch: async () => ({ ok: true, content: JSON.stringify({ choices: [{ message: { content: fenced } }] }) }),
+    env: { OPENAI_API_KEY: 'test-openai-key' },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.answer, 'fenced answer');
+  assert.deepEqual(result.citations, ['1']);
+  assert.equal(result.confidence, 'high');
+});
+
 test('callSecondLlm falls back to evidence only on timeout', async () => {
   const result = await callSecondLlm({
     prompt: 'test',

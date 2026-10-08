@@ -227,7 +227,9 @@ export async function callSecondLlm(options: {
   try {
     const parsed = JSON.parse(response.content ?? '{}');
     const content = parsed?.choices?.[0]?.message?.content ?? '';
-    const parsedContent = content.startsWith('{') ? JSON.parse(content) : { answer: content, citations: [], confidence: 'medium' };
+    // Strip markdown code fences (```json ... ```) some models wrap around JSON
+    const stripped = content.trim().replace(/^```[a-zA-Z]*\s*/i, '').replace(/\s*```$/, '').trim();
+    const parsedContent = stripped.startsWith('{') ? JSON.parse(stripped) : { answer: content, citations: [], confidence: 'medium' };
     return {
       ok: true,
       answer: parsedContent.answer ?? content,
