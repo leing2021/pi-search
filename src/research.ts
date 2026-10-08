@@ -1,5 +1,5 @@
 import { safeFetchText } from './security.ts';
-import { webSearch, type SearchResult } from './providers.ts';
+import { webSearch, extractFirecrawl, type SearchResult } from './providers.ts';
 import { truncateText, sanitizeHtml, uniqueFlags } from './text.ts';
 
 export type LlmConfig = {
@@ -99,7 +99,8 @@ export function clipEvidence(
   let fetchErrors = 0;
   const allRiskFlags: string[] = [];
 
-  for (const source of sources) {
+  for (let i = 0; i < sources.length; i++) {
+    const source = sources[i];
     if (source.fetchError) {
       fetchErrors += 1;
       continue;
@@ -111,12 +112,22 @@ export function clipEvidence(
       truncated = true;
       break;
     }
-    const { text, riskFlags } = sanitizeEvidenceText(source.text, remainingBudget);
+    // Fair-share clipping (context recall over first-come-first-served):
+    // split the leftover budget across the sources still eligible, with a
+    // per-source floor share. Early long sources cannot starve later ones;
+    // short sources release unused budget back to the pool.
+    const remainingSources = Math.min(sources.length - i, maxSources - clipped.length);
+    const share = Math.max(
+      Math.floor(remainingBudget / Math.max(1, remainingSources)),
+      Math.min(remainingBudget, Math.ceil(maxChars / maxSources)),
+    );
+    const { text, riskFlags } = sanitizeEvidenceText(source.text, share);
     allRiskFlags.push(...riskFlags);
 
     const newSource: EvidenceSource = { ...source, text };
     clipped.push(newSource);
     totalChars += text.length;
+    if (text.length >= share) truncated = true;
   }
 
   return {
@@ -313,6 +324,25 @@ export function buildResearchReport(options: {
   };
 }
 
+async function defaultFirecrawlFetch(url: string, opts?: Record<string, unknown>): Promise<{ ok: boolean; status?: number; content?: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const res = await fetch(url, {
+      method: String(opts?.method ?? 'POST'),
+      headers: opts?.headers as Record<string, string> | undefined,
+      body: opts?.body as string | undefined,
+      signal: controller.signal,
+      redirect: 'manual',
+    });
+    clearTimeout(timer);
+    return { ok: res.ok, status: res.status, content: await res.text() };
+  } catch (err) {
+    clearTimeout(timer);
+    throw err;
+  }
+}
+
 export async function researchSearch(options: {
   query: string;
   mode?: 'basic' | 'deep';
@@ -322,10 +352,11 @@ export async function researchSearch(options: {
   fetch?: (url: string) => Promise<{ ok: boolean; content?: string; status?: number }>;
   webSearch?: (opts: { query: string; provider?: string; env?: Record<string, string | undefined> }) => Promise<import('./providers.js').ToolResult<SearchResult[]>>;
   llmFetch?: (url: string, opts?: Record<string, unknown>) => Promise<{ ok: boolean; content?: string }>;
+  firecrawlFetch?: (url: string, opts?: Record<string, unknown>) => Promise<{ ok: boolean; status?: number; content?: string }>;
 }): Promise<ResearchReport> {
   const mode = options.mode ?? 'basic';
   const maxSources = options.maxSources ?? 5;
-  const maxChars = options.maxChars ?? 8000;
+  const maxChars = options.maxChars ?? 16000;
   const env = options.env ?? process.env;
 
   const llmConfig = detectLlmConfig(env);
@@ -356,8 +387,11 @@ export async function researchSearch(options: {
 
   const urls = searchResult.data.map((r) => r);
   const actualFetch = options.fetch ?? safeFetchText;
+  const actualFcFetch = options.firecrawlFetch ?? defaultFirecrawlFetch;
+  const firecrawlKey = env.FIRECRAWL_API_KEY;
   const sources: EvidenceSource[] = [];
   const allRiskFlags: string[] = [];
+  let firecrawlRescues = 0;
 
   for (let i = 0; i < urls.length && sources.length < maxSources; i++) {
     const r = urls[i];
@@ -370,7 +404,31 @@ export async function researchSearch(options: {
         title: r.title,
         text: fetchResult.text,
       });
-    } catch {
+    } catch (err) {
+      // Recoverable failures (HTTP error / timeout / network) may fall back to
+      // Firecrawl — mirroring handleWebFetch. Security policy rejections
+      // (NetworkPolicyError) are never bypassed: the policy applies to the URL.
+      const policyBlocked = (err as { name?: string } | null)?.name === 'NetworkPolicyError';
+      if (!policyBlocked && firecrawlKey) {
+        try {
+          const fcRes = await actualFcFetch('https://api.firecrawl.dev/v1/scrape', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${firecrawlKey}` },
+            body: JSON.stringify({ url: r.url, formats: ['markdown'] }),
+          });
+          if (fcRes.ok) {
+            const extracted = await extractFirecrawl({ apiKey: firecrawlKey }, r.url, fcRes.content ?? '');
+            const text = extracted.markdown || extracted.content;
+            if (text && text.trim()) {
+              firecrawlRescues += 1;
+              sources.push({ id: String(i + 1), url: r.url, title: r.title, text });
+              continue;
+            }
+          }
+        } catch {
+          // Firecrawl rescue failed — fall through to fetchError below
+        }
+      }
       sources.push({
         id: String(i + 1),
         url: r.url,
@@ -417,6 +475,7 @@ export async function researchSearch(options: {
       providersUsed: [searchResult.provider],
       searchProvidersAttempted: (searchResult.details as Record<string, unknown>)?.providersAttempted ?? [searchResult.provider],
       searchFallbackReasons: (searchResult.details as Record<string, unknown>)?.fallbackReasons ?? [],
+      firecrawlRescues,
       apiKeyExposed: false,
     },
   });

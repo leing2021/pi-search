@@ -60,8 +60,32 @@ test('clipEvidence clips per-source to budget', () => {
   ];
   const result = clipEvidence(sources, { maxChars: 100, maxSources: 10 });
   assert.equal(result.truncated, true);
-  assert.equal(result.sources.length, 1);
+  // Fair-share contract: both sources fit under the 100-char budget (coverage
+  // over completeness — the old first-come-first-served behavior dropped source 2)
+  assert.equal(result.sources.length, 2);
   assert.ok(result.totalChars <= 100, `totalChars ${result.totalChars} exceeds maxChars 100`);
+});
+
+test('clipEvidence balances budget across sources (context recall over first-come-first-served)', () => {
+  const sources = [
+    { id: '1', url: 'https://a.com', title: 'A', text: 'A'.repeat(4000) },
+    { id: '2', url: 'https://b.com', title: 'B', text: 'B'.repeat(4000) },
+    { id: '3', url: 'https://c.com', title: 'C', text: 'C'.repeat(4000) },
+  ];
+  const result = clipEvidence(sources, { maxChars: 6000, maxSources: 5 });
+  assert.equal(result.sources.length, 3, 'all 3 sources must fit under 6000 chars with fair shares');
+  assert.ok(result.sources.every((s) => s.text.length <= 2000 + 100), 'per-source share ≈ 2000');
+  assert.ok(result.totalChars <= 6000);
+  // 短源让出余额给后续源：总预算不被早期短源浪费
+  const mixed = clipEvidence(
+    [
+      { id: '1', url: 'https://a.com', title: 'A', text: 'A'.repeat(300) },
+      { id: '2', url: 'https://b.com', title: 'B', text: 'B'.repeat(5000) },
+    ],
+    { maxChars: 4000, maxSources: 5 },
+  );
+  assert.equal(mixed.sources.length, 2);
+  assert.ok(mixed.sources[1].text.length > 3000, 'unused budget from short source flows to later sources');
 });
 
 test('clipEvidence totalChars hard constraint: never exceeds maxChars', () => {
@@ -339,6 +363,67 @@ test('researchSearch skips LLM when evidence is only whitespace', async () => {
   });
   assert.equal(llmCalls, 0, 'whitespace-only evidence must not reach the LLM');
   assert.match(result.verificationStatus, /NoEvidence/);
+});
+
+test('researchSearch rescues failed fetches via Firecrawl (recoverable failures only)', async () => {
+  let fcCalls = 0;
+  const result = await researchSearch({
+    query: 'test',
+    mode: 'basic',
+    env: { PI_SEARCH_LLM_ENABLED: 'never', FIRECRAWL_API_KEY: 'fc-key' },
+    webSearch: async () => ({
+      ok: true,
+      provider: 'brave',
+      data: [{ title: 'T', url: 'https://example.com/blocked-page', snippet: 's' }],
+      details: { providersAttempted: ['brave'], apiKeyExposed: false },
+    }),
+    fetch: async () => {
+      const e = new Error('HTTP 403');
+      e.name = 'HttpStatusError';
+      throw e;
+    },
+    firecrawlFetch: async (url, opts) => {
+      fcCalls += 1;
+      assert.ok(String(url).includes('firecrawl.dev'), 'must call Firecrawl endpoint');
+      assert.equal(JSON.parse(String(opts?.body)).url, 'https://example.com/blocked-page');
+      return { ok: true, content: JSON.stringify({ data: { markdown: '## Rescued evidence content' } }) };
+    },
+  });
+  assert.equal(fcCalls, 1, 'Firecrawl should be called exactly once for the failed source');
+  assert.ok(result.citations.length >= 1, 'rescued source must appear in citations');
+  const cite = result.citations.find((c) => c.url === 'https://example.com/blocked-page');
+  assert.ok(cite, 'rescued citation present');
+  assert.ok(
+    cite.text.includes('Rescued evidence') || cite.snippet.includes('Rescued evidence'),
+    'citation must carry Firecrawl-rescued text',
+  );
+  assert.equal(result.details.firecrawlRescues, 1);
+});
+
+test('researchSearch never bypasses NetworkPolicyError via Firecrawl', async () => {
+  let fcCalls = 0;
+  const result = await researchSearch({
+    query: 'test',
+    mode: 'basic',
+    env: { PI_SEARCH_LLM_ENABLED: 'never', FIRECRAWL_API_KEY: 'fc-key' },
+    webSearch: async () => ({
+      ok: true,
+      provider: 'brave',
+      data: [{ title: 'T', url: 'http://192.168.1.1/secret', snippet: 's' }],
+      details: { providersAttempted: ['brave'], apiKeyExposed: false },
+    }),
+    fetch: async () => {
+      const e = new Error('Private network target is blocked');
+      e.name = 'NetworkPolicyError';
+      throw e;
+    },
+    firecrawlFetch: async () => {
+      fcCalls += 1;
+      return { ok: true, content: JSON.stringify({ data: { markdown: 'leaked' } }) };
+    },
+  });
+  assert.equal(fcCalls, 0, 'security policy rejections must not be bypassed via Firecrawl');
+  assert.equal(result.citations.length, 0, 'policy-blocked source must be dropped, not rescued');
 });
 
 test('researchSearch returns structured error when all sources fail', async () => {
